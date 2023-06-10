@@ -62,6 +62,25 @@ Converts a grayscale image or color image into a binary image where each pixel i
 
 3. Adaptive tresholding: this methods take into account local variations in image intensity and adjust the treshold value in order to it. This is useful when the ilumination conditions or contrast levels vary across different regions of the image.
 
+### Feature Extractions
+
+#### HOG
+
+Histogram of Oriented Gradients is a popular technique in detection and recognition where it captures the shape and gradient in an image by analyzing the distribution of gradient orientations.
+
+First we calculate the gradient of the image, usually a Sobel operator is applied to obtain the horizontal and vertical derivatives of the image.
+The image is divided into smaller images (for example 8 x 8 pixels) for each of this cells, the gradients and orientations are computed. Then the orientations are quantizied into a number of bins (9 bins covering from 0 to 180 degrees for example).
+
+The histogram values then get normalized to robust changes in illumination, contrast, etc. This is usually done with a large block splitted in cells. The idea is to normalize the histogram of each cell in order to the neighboring cells in the block. Finally, the histograms are concatenated in a vector with the distributions of gradient orientations.
+
+#### SIFT
+
+
+
+#### CNN's
+
+
+
 ## Libraries
 
 ### CV2

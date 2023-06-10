@@ -50,10 +50,10 @@ def resize_image(image, target_width, target_height):
 # Function to preprocess the image
 def preprocess_image(image):
     # TODO: Implement preprocessing techniques (e.g., resizing, noise removal, contrast adjustment, binarization, etc.)
-    cv2.imshow("Original Image", image)
+#cv2.imshow("Original Image", image)
     # Resizing
-    new_width = 600
-    new_height = 600
+    new_width = 400
+    new_height = 400
 
     resized_image = resize_image(image, new_width, new_height)
 
@@ -71,10 +71,10 @@ def preprocess_image(image):
 #   equalized_image = cv2.equalizeHist(image)
 
     # Adaptive tresholding
-    preprocessed_image = cv2.adaptiveThreshold(adjusted_image, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY, 11, 2)
+    preprocessed_image = cv2.adaptiveThreshold(adjusted_image, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 13, 8)
     
-    cv2.imshow("Processed image", preprocessed_image)
-    cv2.waitKey(0)
+#cv2.imshow("Processed image", preprocessed_image)
+#cv2.waitKey(0)
 
     # Return the preprocessed image
     return preprocessed_image
@@ -85,7 +85,7 @@ def get_ground_truth_label(filename):
     base_filename = filename.split(".")[0]
 
     # Assuming the ground truth labels are stored in a separate file named "ground_truth.txt"
-    ground_truth_file = "./data/labels.txt"
+    ground_truth_file = "./data/training_data/labels.txt"
 
     # Load the ground truth labels from the file
     with open(ground_truth_file, "r") as file:
@@ -102,39 +102,115 @@ def get_ground_truth_label(filename):
     # If no ground truth label is found, return None
     return None
 
-
-
 def prepare_data():
-    dataset_directory = "./data"
+    dataset_directory = "./data/training_data"
     images, labels = load_images_from_directory(dataset_directory)
     
     # TODO: Further processing or saving of the images and labels as needed
 
     print("Number of images:", len(images))
     print("Number of labels:", len(labels))
+    return images, labels
 
-# Step 2: Preprocessing
-# TODO: Implement image preprocessing techniques like resizing, noise removal, contrast adjustment, and binarization.
-
-# Step 3: Feature Extraction
+# Step 2: Feature Extraction
 # TODO: Implement feature extraction methods like HOG, SIFT, or CNNs to extract relevant features from the preprocessed images.
 
-# Step 4: HMM Modeling
+def extract_hog_features(image):
+    hog = cv2.HOGDescriptor()
+    features = hog.compute(image)
+    return features.flatten()
+
+def neighbor_filter(boundaries, threshold, size_similarity_threshold):
+    num_boundaries = len(boundaries)
+    filtered_boundaries = []
+    for i in range(num_boundaries):
+        x1, y1, w1, h1 = boundaries[i]
+        center1 = (x1 + w1 // 2, y1 + h1 //2)
+        nearest_neighbor_distance = np.inf
+
+        for j in range(num_boundaries):
+            if i == j:
+                continue
+            x2, y2, w2, h2 = boundaries[j]
+            center2 = (x2 + w2 // 2, y2 + h2 // 2)
+            distance = np.linalg.norm(np.array(center1) - np.array(center2))
+
+            if distance < nearest_neighbor_distance  and abs(w1 - w2) < size_similarity_threshold and abs(h1 - h2) < size_similarity_threshold:
+                nearest_neighbor_distance = distance
+        
+        if nearest_neighbor_distance < threshold:
+            filtered_boundaries.append((boundaries[i], nearest_neighbor_distance))
+    return filtered_boundaries
+
+def filter_letter_boundaries(letter_boundaries):
+    filtered_boundaries = []
+
+    min_width = 2
+    max_width = 50
+    min_height = 12
+    max_height = 130
+    min_aspect_ratio = 0.11
+    max_aspect_ratio = 1.7
+
+    min_circularity = 0.2
+
+    for boundary in letter_boundaries:
+        x, y, w, h = boundary
+        aspect_ratio = float(w) / h
+        if w > min_width and w < max_width and h > min_height and h < max_height and aspect_ratio > min_aspect_ratio and aspect_ratio < max_aspect_ratio:
+            contour = np.array([[x, y], [x+w, y], [x+w, y+h], [x, y+h]])
+            contour_area = cv2.contourArea(contour)
+            perimeter = cv2.arcLength(contour, True)
+            circularity = 4 * np.pi * contour_area / (perimeter * perimeter)
+            if circularity > min_circularity:
+                filtered_boundaries.append(boundary)
+    return filtered_boundaries
+
+def extract_letter_boundaries(image):
+    _, binary = cv2.threshold(image, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    boundaries = []
+    for contour in contours:
+        x, y, w, h = cv2.boundingRect(contour)
+        boundaries.append((x,y,w,h))
+    return boundaries
+ 
+def extraction():
+    images, labels = prepare_data()
+    for img in images:
+        hog_features = extract_hog_features(img)
+        letter_boundaries = extract_letter_boundaries(img)
+        filtered_boundaries = filter_letter_boundaries(letter_boundaries)
+        neighbor_boundaries = neighbor_filter(filtered_boundaries, 27, 20)
+
+        print("HOG Features shape:", hog_features.shape)
+        print("Letter Boundaries:", filtered_boundaries)
+        
+        for (x,y,w,h), dist in neighbor_boundaries:
+            cv2.rectangle(img, (x,y), (x+w, y+h), (0,255,0), 2)
+            cv2.imshow("Boundaries", img) 
+            print(f"nearest_distance: {dist}")
+            print(f"dimensions: {w}, {h}")
+            print(f"aspect ratio is:", float(w)/h)
+            cv2.waitKey(0)
+        cv2.destroyAllWindows()
+
+# Step 3: HMM Modeling
 # TODO: Design and train Hidden Markov Models (HMMs) using the extracted features.
 
-# Step 5: Recognition
+# Step 4: Recognition
 # TODO: Given an input image, extract features from text regions.
 # TODO: Use the trained HMMs and the Viterbi algorithm to decode the most probable sequence of characters or words.
 # TODO: Output the recognized text.
 
-# Step 6: Evaluation and Refinement
+# Step 5: Evaluation and Refinement
 # TODO: Evaluate the performance of your text recognition system using appropriate evaluation metrics.
 # TODO: Iterate and refine the preprocessing, feature extraction, and HMM modeling steps to improve accuracy.
 
 # Main function to orchestrate the project
 def main():
     # TODO: Implement the main workflow of your project, including loading data, preprocessing, feature extraction, HMM training, recognition, evaluation, and refinement.
-    prepare_data()
+    extraction()
 
 if __name__ == "__main__":
     main()
