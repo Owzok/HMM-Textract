@@ -62,6 +62,9 @@ Converts a grayscale image or color image into a binary image where each pixel i
 
 3. Adaptive tresholding: this methods take into account local variations in image intensity and adjust the treshold value in order to it. This is useful when the ilumination conditions or contrast levels vary across different regions of the image.
 
+##### Otsu's Binarization
+In global thresholding, we use an arbitrary chosen value as a threshold. In contrast, Otsu's method avoids having to choose a value and instead, determines it automatically.
+
 ### Feature Extractions
 
 #### HOG
@@ -101,3 +104,35 @@ Where:
 
 Returns a **NumPy array** if the image is loaded successfully.
 
+```py
+cv2.adaptiveThreshold(image, classifier, value, threshold)
+```
+1. Image: Grayscale Image.
+
+2. Classifier: Threshold value to classify the pixel values.
+
+3. Value: Value assigned to pixels exceeding the threshold.
+
+4. Thresholds provided by OpenCV.
+
+- cv.THRESH_BINARY
+- cv.THRESH_BINARY_INV
+- cv.THRESH_TRUNC
+- cv.THRESH_TOZERO
+- cv.THRESH_TOZERO_INV
+
+![cv2threshold](./imgs/cv2threshold.png)
+
+```py
+cv2.threshold(threshold, block_size)
+```
+
+The previous function uses a global value as a threshold but it might not work in all cases. If an image has different lightning conditions, adaptive threshold can help. Here, the algorithm determines the threshold for a pixel based on a small region around it. 
+
+1. Threshold: How the threshold is calculated
+- ADAPTIVE_THRESH_MEAN_C: Mean of the neighbor area minus the constant C.
+- ADAPTVIE_THRESH_GAUSSIAN_C: Gaussian-weighted sum of the neighborhood values minus the constant C.
+
+2. Block Size: determines the neighbourhood area and C is a constant that is substracted from the mean or weighted sum of the neighbourhood pixels.
+
+![cv2adaptive](./imgs/cv2adaptive.png)

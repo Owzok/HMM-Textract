@@ -2,6 +2,8 @@ import numpy as np          # math
 import pandas as pd         # datasets
 import os                   # find files
 import cv2                  # machine learning
+from hmmlearn import hmm
+from sklearn.preprocessing import KBinsDiscretizer
 
 # Step 1: Data Preparation
 
@@ -44,7 +46,6 @@ def resize_image(image, target_width, target_height):
     right_padding = target_width - new_width - left_padding
     resized_image = cv2.copyMakeBorder(resized_image, top_padding, bottom_padding, left_padding, right_padding,
                                        cv2.BORDER_CONSTANT, value=(0, 0, 0))
-
     return resized_image
 
 # Function to preprocess the image
@@ -52,8 +53,8 @@ def preprocess_image(image):
     # TODO: Implement preprocessing techniques (e.g., resizing, noise removal, contrast adjustment, binarization, etc.)
 #cv2.imshow("Original Image", image)
     # Resizing
-    new_width = 400
-    new_height = 400
+    new_width = 600
+    new_height = 600
 
     resized_image = resize_image(image, new_width, new_height)
 
@@ -135,24 +136,24 @@ def neighbor_filter(boundaries, threshold, size_similarity_threshold):
             center2 = (x2 + w2 // 2, y2 + h2 // 2)
             distance = np.linalg.norm(np.array(center1) - np.array(center2))
 
-            if distance < nearest_neighbor_distance  and abs(w1 - w2) < size_similarity_threshold and abs(h1 - h2) < size_similarity_threshold:
+            if distance < nearest_neighbor_distance  and abs(w1 - w2) < w1*size_similarity_threshold and abs(h1 - h2) < h1*size_similarity_threshold:
                 nearest_neighbor_distance = distance
         
         if nearest_neighbor_distance < threshold:
-            filtered_boundaries.append((boundaries[i], nearest_neighbor_distance))
+            filtered_boundaries.append(boundaries[i])
     return filtered_boundaries
 
 def filter_letter_boundaries(letter_boundaries):
     filtered_boundaries = []
 
-    min_width = 2
-    max_width = 50
-    min_height = 12
-    max_height = 130
-    min_aspect_ratio = 0.11
-    max_aspect_ratio = 1.7
+    min_width = 3
+    max_width = 40
+    min_height = 7
+    max_height = 40
+    min_aspect_ratio = 0
+    max_aspect_ratio = 5
 
-    min_circularity = 0.2
+    min_circularity = 0
 
     for boundary in letter_boundaries:
         x, y, w, h = boundary
@@ -174,43 +175,170 @@ def extract_letter_boundaries(image):
         x, y, w, h = cv2.boundingRect(contour)
         boundaries.append((x,y,w,h))
     return boundaries
- 
+
+def sort_boundaries(boundaries):
+    # Get unique y-positions
+    y_positions = sorted(list(set(b[1] for b in boundaries)))
+    if(len(boundaries) == 0):
+        return []
+    # Merge similar y-positions
+    merged_y_positions = []
+    merged_indices = []
+    prev_y = y_positions[0]
+
+    for i in range(1, len(y_positions)):
+        if y_positions[i] - prev_y > 10:
+            merged_y_positions.append(prev_y)
+            merged_indices.append(i-1)
+        prev_y = y_positions[i]
+    merged_y_positions.append(prev_y)
+    merged_indices.append(len(y_positions)-1)
+
+    # Assign each boundary to its corresponding merged y-position
+    merged_y_bins = []
+    for i, b in enumerate(boundaries):
+        y = b[1]
+        for j, idx in enumerate(merged_indices):
+            if y <= y_positions[idx]:
+                merged_y_bins.append(merged_y_positions[j])
+                break
+    
+    # Sort boundaries based on merged y-positions, followed by x-coordinate
+    sorted_boundaries = [b for _, b in sorted(zip(merged_y_bins, boundaries), key=lambda x: (x[0], x[1][0]))]
+
+    return sorted_boundaries
+
+def extract_roi_hog(image, x, y, w, h):
+    #print("Image shape:", image.shape)
+    #print("ROI coordinates (x, y, w, h):", x, y, w, h)
+
+    # Check if the ROI coordinates are within the image bounds
+    if x < 0 or y < 0 or x+w > image.shape[1] or y+h > image.shape[0]:
+        print("ROI coordinates are outside the image bounds!")
+        return None
+
+    # Extract the region of interest (ROI) from the image based on the boundary
+    roi = image[y:y+h, x:x+w]
+
+    # Check if the ROI image is grayscale
+    if len(roi.shape) == 2:
+        roi_gray = roi  # Grayscale image
+    else:
+        roi_gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)  # Convert color image to grayscale
+
+    # Resize ROI image to a fixed size (e.g., 64x128) compatible with HOG descriptor
+    roi_resized = cv2.resize(roi_gray, (64, 128))
+
+    # Compute the HOG features for the resized ROI
+    hog = cv2.HOGDescriptor()
+    features = hog.compute(roi_resized)
+
+    # Flatten the feature vector
+    features = features.flatten()
+
+    return features
+
+
 def extraction():
     images, labels = prepare_data()
-    for img in images:
+
+    m_training_data = []
+    m_training_labels = []
+
+    for idx, img in enumerate(images):
         hog_features = extract_hog_features(img)
         letter_boundaries = extract_letter_boundaries(img)
         filtered_boundaries = filter_letter_boundaries(letter_boundaries)
-        neighbor_boundaries = neighbor_filter(filtered_boundaries, 27, 20)
+        neighbor_boundaries = neighbor_filter(filtered_boundaries, 50, 20)
 
-        print("HOG Features shape:", hog_features.shape)
-        print("Letter Boundaries:", filtered_boundaries)
-        
-        for (x,y,w,h), dist in neighbor_boundaries:
-            cv2.rectangle(img, (x,y), (x+w, y+h), (0,255,0), 2)
-            cv2.imshow("Boundaries", img) 
-            print(f"nearest_distance: {dist}")
-            print(f"dimensions: {w}, {h}")
-            print(f"aspect ratio is:", float(w)/h)
-            cv2.waitKey(0)
+        sorted_boundaries = sort_boundaries(neighbor_boundaries)
+
+        #print(labels)
+
+        # Read labels and assign characters to boundaries sequentially
+        label = labels[idx].replace(" ", "")
+        label_idx = 0
+
+        for (x, y, w, h) in sorted_boundaries:
+            if label_idx >= len(label):
+                break
+
+            # Assign character to the boundary
+            character = label[label_idx]
+            label_idx += 1
+
+            # Check if label index exceeds the label length
+            cv2.rectangle(img, (x, y), (x+w, y+h), (0, 255, 0), 2)
+            cv2.putText(img, character, (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 2)
+            #print(f"dimensions: ({w}, {h})")
+            
+            #cv2.imshow("Boundaries", img)
+            #cv2.waitKey(0)
+
+            m_training_data.append(extract_roi_hog(img, x,y,w,h))
+            m_training_labels.append(character)
+            
         cv2.destroyAllWindows()
+    return m_training_data, m_training_labels
 
 # Step 3: HMM Modeling
 # TODO: Design and train Hidden Markov Models (HMMs) using the extracted features.
 
+def train_hmm_model(training_data, training_labels):
+    negative_count = 0
+    for data in training_data:
+        if np.any(data < 0):
+            negative_count += 1
+
+    print("Total arrays with negative values:", negative_count)
+
+    print(training_labels)
+    states = list(set(training_labels))
+
+    # Discretize the observations (HOG feature vectors)
+    observations = []
+    num_bins = 10  # Number of bins for discretization
+
+    for data in training_data:
+        bins = np.linspace(np.min(data), np.max(data), num_bins+1)
+        discrete_data = np.digitize(data, bins) - 1  # Discretize and shift to start from 0
+        observations.append(discrete_data)
+
+    # Prepare lengths array for each sequence
+    lengths = [len(obs) for obs in observations]
+
+    # Flatten the observations and concatenate them
+    flat_observations = np.concatenate(observations)
+
+    hmm_model = hmm.CategoricalHMM(n_components=len(states), n_iter=3)
+    hmm_model.fit(flat_observations.reshape(-1, 1), lengths=lengths)
+
+    transition_matrix = hmm_model.transmat_
+    emission_probabilities = hmm_model.emissionprob_
+
+    print("Transition Matrix:")
+    print(transition_matrix)
+    print("Emission Probabilities:")
+    print(emission_probabilities)
+
+    
 # Step 4: Recognition
 # TODO: Given an input image, extract features from text regions.
 # TODO: Use the trained HMMs and the Viterbi algorithm to decode the most probable sequence of characters or words.
 # TODO: Output the recognized text.
 
+
+
 # Step 5: Evaluation and Refinement
 # TODO: Evaluate the performance of your text recognition system using appropriate evaluation metrics.
 # TODO: Iterate and refine the preprocessing, feature extraction, and HMM modeling steps to improve accuracy.
 
+
 # Main function to orchestrate the project
 def main():
     # TODO: Implement the main workflow of your project, including loading data, preprocessing, feature extraction, HMM training, recognition, evaluation, and refinement.
-    extraction()
+    t_d, t_l = extraction()
+    train_hmm_model(t_d, t_l)
 
 if __name__ == "__main__":
     main()
