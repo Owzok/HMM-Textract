@@ -6,17 +6,18 @@ from hmmlearn import hmm
 from sklearn.preprocessing import KBinsDiscretizer
 
 # Step 1: Data Preparation
-
 # Function to load and preprocess images from a directory
 def load_images_from_directory(directory):
     images = []
     labels = []
     for filename in os.listdir(directory):
-        if filename.endswith(".jpeg") or filename.endswith(".png"):
+        if filename.endswith(".jpeg") or filename.endswith(".png") or filename.endswith(".webp"):
             image_path = os.path.join(directory, filename)
             # 0 flag will read it as a grayscale image
             image = cv2.imread(image_path, 0)
             # Preprocess the image as needed and append it to the images list
+            cv2.imshow("img",image)
+            cv2.waitKey(0)
             images.append(preprocess_image(image))
             labels.append(get_ground_truth_label(filename))
     return images, labels
@@ -51,7 +52,7 @@ def resize_image(image, target_width, target_height):
 # Function to preprocess the image
 def preprocess_image(image):
     # TODO: Implement preprocessing techniques (e.g., resizing, noise removal, contrast adjustment, binarization, etc.)
-#cv2.imshow("Original Image", image)
+    #cv2.imshow("Original Image", image)
     # Resizing
     new_width = 600
     new_height = 600
@@ -60,7 +61,6 @@ def preprocess_image(image):
 
     # Median filter for salt-and-pepper noise removal
 #   denoised_image = cv2.medianBlur(image, 3)
-
     # Contrast adjustment (intensity scaling)
     min_intensity = image.min()
     max_intensity = image.max()
@@ -74,8 +74,8 @@ def preprocess_image(image):
     # Adaptive tresholding
     preprocessed_image = cv2.adaptiveThreshold(adjusted_image, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 13, 8)
     
-#cv2.imshow("Processed image", preprocessed_image)
-#cv2.waitKey(0)
+    #cv2.imshow("Processed image", preprocessed_image)
+    #cv2.waitKey(0)
 
     # Return the preprocessed image
     return preprocessed_image
@@ -100,7 +100,7 @@ def get_ground_truth_label(filename):
                 return ground_truth_label
 
     raise Exception("Ground truth label is not found for " + filename)
-    # If no ground truth label is found, return None
+    # If no ground truth label is found, return None0
     return None
 
 def prepare_data():
@@ -136,7 +136,7 @@ def neighbor_filter(boundaries, threshold, size_similarity_threshold):
             center2 = (x2 + w2 // 2, y2 + h2 // 2)
             distance = np.linalg.norm(np.array(center1) - np.array(center2))
 
-            if distance < nearest_neighbor_distance  and abs(w1 - w2) < w1*size_similarity_threshold and abs(h1 - h2) < h1*size_similarity_threshold:
+            if distance < nearest_neighbor_distance and abs(h1 - h2) < h1*size_similarity_threshold:
                 nearest_neighbor_distance = distance
         
         if nearest_neighbor_distance < threshold:
@@ -146,14 +146,14 @@ def neighbor_filter(boundaries, threshold, size_similarity_threshold):
 def filter_letter_boundaries(letter_boundaries):
     filtered_boundaries = []
 
-    min_width = 3
-    max_width = 40
+    min_width = 1
+    max_width = 80
     min_height = 7
-    max_height = 40
+    max_height = 150
     min_aspect_ratio = 0
-    max_aspect_ratio = 5
+    max_aspect_ratio = 2
 
-    min_circularity = 0
+    min_circularity = 0.13
 
     for boundary in letter_boundaries:
         x, y, w, h = boundary
@@ -222,7 +222,7 @@ def extract_roi_hog(image, x, y, w, h):
 
     # Check if the ROI image is grayscale
     if len(roi.shape) == 2:
-        roi_gray = roi  # Grayscale image
+        roi_gray = roi                                    # Grayscale image
     else:
         roi_gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)  # Convert color image to grayscale
 
@@ -231,49 +231,64 @@ def extract_roi_hog(image, x, y, w, h):
 
     # Compute the HOG features for the resized ROI
     hog = cv2.HOGDescriptor()
-    features = hog.compute(roi_resized)
-
-    # Flatten the feature vector
-    features = features.flatten()
+    features = hog.compute(roi_resized).flatten()
 
     return features
 
+def show_boundaries(img, boundaries):
+    length = len(boundaries)
+    for (x, y, w, h) in boundaries:
+        cv2.rectangle(img, (x, y), (x+w, y+h), (0, 255, 0), 2)
+        #print(f"[{index}/{length}]: ({x},{y},{w},{h})")
+    cv2.imshow("Boundaries", img)
+    cv2.waitKey(0)
+        
+    cv2.destroyAllWindows()
 
-def extraction():
+def get_boundaries(image, show_letter=False, show_filtered=False, show_neighbor=False, show_sorted=False):
+    letter_boundaries = extract_letter_boundaries(image)
+    filtered_boundaries = filter_letter_boundaries(letter_boundaries)
+    neighbor_boundaries = neighbor_filter(filtered_boundaries, 50, 3)
+    sorted_boundaries = sort_boundaries(neighbor_boundaries)
+
+    if show_letter == True:
+       show_boundaries(image, letter_boundaries)
+    if show_filtered == True:
+        show_boundaries(image, filtered_boundaries)
+    if show_neighbor == True:
+        show_boundaries(image, neighbor_boundaries)
+    if show_sorted == True:
+        show_boundaries(image, sorted_boundaries)
+
+    return sorted_boundaries
+
+def extraction(test=False):
     images, labels = prepare_data()
 
     m_training_data = []
     m_training_labels = []
 
     for idx, img in enumerate(images):
-        hog_features = extract_hog_features(img)
-        letter_boundaries = extract_letter_boundaries(img)
-        filtered_boundaries = filter_letter_boundaries(letter_boundaries)
-        neighbor_boundaries = neighbor_filter(filtered_boundaries, 50, 20)
-
-        sorted_boundaries = sort_boundaries(neighbor_boundaries)
-
-        #print(labels)
+        boundaries = get_boundaries(img)
 
         # Read labels and assign characters to boundaries sequentially
         label = labels[idx].replace(" ", "")
         label_idx = 0
 
-        for (x, y, w, h) in sorted_boundaries:
+        for (x, y, w, h) in boundaries:
             if label_idx >= len(label):
                 break
 
-            # Assign character to the boundary
             character = label[label_idx]
             label_idx += 1
 
+            if test:
             # Check if label index exceeds the label length
-            cv2.rectangle(img, (x, y), (x+w, y+h), (0, 255, 0), 2)
-            cv2.putText(img, character, (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 2)
-            #print(f"dimensions: ({w}, {h})")
+                cv2.rectangle(img, (x, y), (x+w, y+h), (0, 255, 0), 2)
+                cv2.putText(img, character, (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 2)
             
-            #cv2.imshow("Boundaries", img)
-            #cv2.waitKey(0)
+                cv2.imshow("Boundaries", img)
+                cv2.waitKey(0)
 
             m_training_data.append(extract_roi_hog(img, x,y,w,h))
             m_training_labels.append(character)
@@ -283,6 +298,16 @@ def extraction():
 
 # Step 3: HMM Modeling
 # TODO: Design and train Hidden Markov Models (HMMs) using the extracted features.
+
+def discretize_features(boundaries):
+    discretized_features = []
+    num_bins = 10
+    for data in boundaries:
+        bins = np.linspace(np.min(data), np.max(data), num_bins+1)
+        discrete_data = np.digitize(data, bins) - 1
+        discretized_features.append(discrete_data)
+    
+    return discretized_features
 
 def train_hmm_model(training_data, training_labels):
     negative_count = 0
@@ -296,13 +321,7 @@ def train_hmm_model(training_data, training_labels):
     states = list(set(training_labels))
 
     # Discretize the observations (HOG feature vectors)
-    observations = []
-    num_bins = 10  # Number of bins for discretization
-
-    for data in training_data:
-        bins = np.linspace(np.min(data), np.max(data), num_bins+1)
-        discrete_data = np.digitize(data, bins) - 1  # Discretize and shift to start from 0
-        observations.append(discrete_data)
+    observations = discretize_features(training_data)
 
     # Prepare lengths array for each sequence
     lengths = [len(obs) for obs in observations]
@@ -310,35 +329,65 @@ def train_hmm_model(training_data, training_labels):
     # Flatten the observations and concatenate them
     flat_observations = np.concatenate(observations)
 
-    hmm_model = hmm.CategoricalHMM(n_components=len(states), n_iter=3)
+    hmm_model = hmm.CategoricalHMM(n_components=len(states), n_iter=1)
     hmm_model.fit(flat_observations.reshape(-1, 1), lengths=lengths)
 
     transition_matrix = hmm_model.transmat_
     emission_probabilities = hmm_model.emissionprob_
 
-    print("Transition Matrix:")
-    print(transition_matrix)
-    print("Emission Probabilities:")
-    print(emission_probabilities)
+    #print("Transition Matrix:")
+    #print(transition_matrix)
+    #print("Emission Probabilities:")
+    #print(emission_probabilities)
+    return hmm_model
 
-    
 # Step 4: Recognition
 # TODO: Given an input image, extract features from text regions.
 # TODO: Use the trained HMMs and the Viterbi algorithm to decode the most probable sequence of characters or words.
 # TODO: Output the recognized text.
 
+def input_recognition(img_path):
+    img = preprocess_image(cv2.imread(img_path, 0))
+    boundaries = get_boundaries(img)
+    return boundaries
 
+def generate_symbol_to_label(hidden_labels):
+    symbol_to_label = {i: label for i, label in enumerate(hidden_labels)}
+    return symbol_to_label
+
+def test(hmm_model, boundaries, hidden_labels):
+    sym_dict = generate_symbol_to_label(hidden_labels)
+    features = discretize_features(boundaries) 
+    hidden_states = hmm_model.predict(features)
+    print("len:",len(features))
+    extracted_text = "".join(sym_dict[symbol] for symbol in hidden_states)
+
+    return extracted_text
 
 # Step 5: Evaluation and Refinement
 # TODO: Evaluate the performance of your text recognition system using appropriate evaluation metrics.
 # TODO: Iterate and refine the preprocessing, feature extraction, and HMM modeling steps to improve accuracy.
 
+def test_training():
+    directory = "./data/training_data"
+    for filename in os.listdir(directory):
+        if filename.endswith(".jpeg") or filename.endswith(".png") or filename.endswith(".webp"):
+            image_path = os.path.join(directory, filename)
+            image = preprocess_image(cv2.imread(image_path, 0))
+            print(filename)
+            get_boundaries(image, show_sorted=True)
 
 # Main function to orchestrate the project
 def main():
     # TODO: Implement the main workflow of your project, including loading data, preprocessing, feature extraction, HMM training, recognition, evaluation, and refinement.
+    #test_training()
     t_d, t_l = extraction()
-    train_hmm_model(t_d, t_l)
+    hmm = train_hmm_model(t_d, t_l)
+    test_features = input_recognition("./data/test_data/0.jpeg")
+    print("test features:",test_features)
+    print("Doing text extraction !")
+    result = test(hmm, test_features, t_l)
+    print("Result:",result)
 
 if __name__ == "__main__":
     main()
