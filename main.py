@@ -4,6 +4,12 @@ import os                   # find files
 import cv2                  # machine learning
 from hmmlearn import hmm
 from sklearn.preprocessing import KBinsDiscretizer
+import concurrent.futures
+from functools import partial
+from joblib import Parallel, delayed
+import time
+from difflib import SequenceMatcher
+import matplotlib.pyplot as plt
 
 # Step 1: Data Preparation
 # Function to load and preprocess images from a directory
@@ -16,8 +22,8 @@ def load_images_from_directory(directory):
             # 0 flag will read it as a grayscale image
             image = cv2.imread(image_path, 0)
             # Preprocess the image as needed and append it to the images list
-            cv2.imshow("img",image)
-            cv2.waitKey(0)
+            #cv2.imshow("img",image)
+            #cv2.waitKey(0)
             images.append(preprocess_image(image))
             labels.append(get_ground_truth_label(filename))
     return images, labels
@@ -117,9 +123,15 @@ def prepare_data():
 # TODO: Implement feature extraction methods like HOG, SIFT, or CNNs to extract relevant features from the preprocessed images.
 
 def extract_hog_features(image):
-    hog = cv2.HOGDescriptor()
+    win_size = (64, 128)
+    block_size = (16, 16)
+    block_stride = (8, 8)
+    cell_size = (8, 8)
+    num_bins = 9
+    hog = cv2.HOGDescriptor(win_size, block_size, block_stride, cell_size, num_bins)
     features = hog.compute(image)
     return features.flatten()
+
 
 def neighbor_filter(boundaries, threshold, size_similarity_threshold):
     num_boundaries = len(boundaries)
@@ -269,7 +281,7 @@ def extraction(test=False):
     m_training_labels = []
 
     for idx, img in enumerate(images):
-        boundaries = get_boundaries(img)
+        boundaries = get_boundaries(img, show_letter=test, show_filtered=test, show_neighbor=test)
 
         # Read labels and assign characters to boundaries sequentially
         label = labels[idx].replace(" ", "")
@@ -309,15 +321,38 @@ def discretize_features(boundaries):
     
     return discretized_features
 
+
+def parallel_train_hmm_model(training_data, training_labels, num_threads, iterations):
+    states = list(set(training_labels))
+    
+    observations = discretize_features(training_data)
+    
+    lengths = [len(obs) for obs in observations]
+
+    flat_observations = np.concatenate(observations)
+
+    def train_hmm(idx):
+        # Map string states to integer values
+        state_map = {state: i for i, state in enumerate(states)}
+        encoded_labels = [state_map[label] for label in training_labels[idx]]
+
+        hmm_model = hmm.CategoricalHMM(n_components=len(states), n_iter=iterations)
+        hmm_model.fit(observations[idx].reshape(-1, 1), lengths=[lengths[idx]])
+
+        return hmm_model
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=num_threads) as executor:
+        results = executor.map(train_hmm, range(num_threads))
+
+        for result in results:
+            hmm_model = result
+            break  # Exit the loop after the first result
+
+    return hmm_model
+
+
+
 def train_hmm_model(training_data, training_labels):
-    negative_count = 0
-    for data in training_data:
-        if np.any(data < 0):
-            negative_count += 1
-
-    print("Total arrays with negative values:", negative_count)
-
-    print(training_labels)
     states = list(set(training_labels))
 
     # Discretize the observations (HOG feature vectors)
@@ -347,9 +382,13 @@ def train_hmm_model(training_data, training_labels):
 # TODO: Output the recognized text.
 
 def input_recognition(img_path):
-    img = preprocess_image(cv2.imread(img_path, 0))
-    boundaries = get_boundaries(img)
-    return boundaries
+    features = []
+    img = preprocess_image(cv2.imread(img_path, 0))    
+    boundaries = get_boundaries(img,show_sorted=False)
+    for (x,y,w,h) in boundaries:
+        features.append(extract_roi_hog(img, x,y,w,h))
+
+    return features
 
 def generate_symbol_to_label(hidden_labels):
     symbol_to_label = {i: label for i, label in enumerate(hidden_labels)}
@@ -358,10 +397,33 @@ def generate_symbol_to_label(hidden_labels):
 def test(hmm_model, boundaries, hidden_labels):
     sym_dict = generate_symbol_to_label(hidden_labels)
     features = discretize_features(boundaries) 
-    hidden_states = hmm_model.predict(features)
-    print("len:",len(features))
+
+    #print("Features:", features)  # Print the features for debugging purposes
+
+    hidden_states = hmm_model.predict(np.array([feature[0] for feature in features]).reshape(-1, 1))
     extracted_text = "".join(sym_dict[symbol] for symbol in hidden_states)
 
+    #print("Hidden States:", hidden_states)  # Print the hidden states for debugging purposes
+
+    return extracted_text
+
+
+def parallel_test(hmm_models, boundaries, hidden_labels):
+    sym_dict = generate_symbol_to_label(hidden_labels)
+    features = discretize_features(boundaries)
+
+    def predict_parallel(hmm_model, feature):
+        return hmm_model.predict([feature])
+
+    hidden_states = []
+    for hmm_model in hmm_models:
+        hidden_states.extend(
+            Parallel(n_jobs=-1)(delayed(predict_parallel)(hmm_model, feature) for feature in features)
+        )
+
+    # Flatten the nested list
+    hidden_states = [symbol for sublist in hidden_states for symbol in sublist]
+    extracted_text = "".join(sym_dict[symbol] for symbol in hidden_states)
     return extracted_text
 
 # Step 5: Evaluation and Refinement
@@ -377,17 +439,45 @@ def test_training():
             print(filename)
             get_boundaries(image, show_sorted=True)
 
+def similar(a, b):
+    return SequenceMatcher(None, a, b).ratio()
+
 # Main function to orchestrate the project
 def main():
     # TODO: Implement the main workflow of your project, including loading data, preprocessing, feature extraction, HMM training, recognition, evaluation, and refinement.
     #test_training()
-    t_d, t_l = extraction()
-    hmm = train_hmm_model(t_d, t_l)
-    test_features = input_recognition("./data/test_data/0.jpeg")
-    print("test features:",test_features)
-    print("Doing text extraction !")
-    result = test(hmm, test_features, t_l)
-    print("Result:",result)
+
+    iterations_list = []
+    similarity_list = []
+
+    num_threads = 6
+    training_data, training_labels = extraction()
+
+    i = 1
+
+    while(True):
+        if i > 20:
+            break
+
+        start_time = time.time()
+        #hmm_model = train_hmm_model(training_data, training_labels)
+        hmm_model = parallel_train_hmm_model(training_data, training_labels, num_threads, i*5)
+        print(f"hmm trained {i*10} simulations in: {time.time() - start_time}s")
+
+        test_features = input_recognition("./data/test_data/0.jpeg")
+        #print("test_features length:",len(test_features))
+        start_time = time.time()
+        result = test(hmm_model, test_features, training_labels)
+        #result = parallel_test(hmm_models, test_features, training_labels)
+        print(f"hmm predicted in: {time.time() - start_time}s")
+
+        print(result)
+        iterations_list.append(i)
+        similarity_list.append(similar(result, '#1TexttoSpeechTTSReadercom')*100)
+        i += 1
+
+    plt.plot(iterations_list, similarity_list)
+    plt.show()
 
 if __name__ == "__main__":
     main()
